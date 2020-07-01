@@ -1,0 +1,98 @@
+diff --git a/core/modules/comment/src/CommentLazyBuilders.php b/core/modules/comment/src/CommentLazyBuilders.php
+index 90c2c696fc..e728faffd7 100644
+--- a/core/modules/comment/src/CommentLazyBuilders.php
++++ b/core/modules/comment/src/CommentLazyBuilders.php
+@@ -137,6 +137,12 @@ public function renderLinks($comment_entity_id, $view_mode, $langcode, $is_in_pr
+     if (!$is_in_preview) {
+       /** @var \Drupal\comment\CommentInterface $entity */
+       $entity = $this->entityTypeManager->getStorage('comment')->load($comment_entity_id);
++      try {
++        $entity = $entity->getTranslation($langcode);
++      }
++      catch (\InvalidArgumentException $e) {
++        // Invalid translation language ($langcode) specified.
++      }
+       $commented_entity = $entity->getCommentedEntity();
+ 
+       $links['comment'] = $this->buildLinks($entity, $commented_entity);
+@@ -172,6 +178,7 @@ protected function buildLinks(CommentInterface $entity, EntityInterface $comment
+         $links['comment-delete'] = [
+           'title' => t('Delete'),
+           'url' => $entity->toUrl('delete-form'),
++          'language' => $entity->language(),
+         ];
+       }
+ 
+@@ -179,6 +186,7 @@ protected function buildLinks(CommentInterface $entity, EntityInterface $comment
+         $links['comment-edit'] = [
+           'title' => t('Edit'),
+           'url' => $entity->toUrl('edit-form'),
++          'language' => $entity->language(),
+         ];
+       }
+       if ($entity->access('create')) {
+@@ -190,6 +198,7 @@ protected function buildLinks(CommentInterface $entity, EntityInterface $comment
+             'field_name' => $entity->getFieldName(),
+             'pid' => $entity->id(),
+           ]),
++          'language' => $entity->language(),
+         ];
+       }
+       if (!$entity->isPublished() && $entity->access('approve')) {
+diff --git a/core/modules/comment/tests/src/Functional/CommentTranslationUITest.php b/core/modules/comment/tests/src/Functional/CommentTranslationUITest.php
+index 9977208037..712782ed6a 100644
+--- a/core/modules/comment/tests/src/Functional/CommentTranslationUITest.php
++++ b/core/modules/comment/tests/src/Functional/CommentTranslationUITest.php
+@@ -6,6 +6,7 @@
+ use Drupal\comment\Tests\CommentTestTrait;
+ use Drupal\language\Entity\ConfigurableLanguage;
+ use Drupal\Tests\content_translation\Functional\ContentTranslationUITestBase;
++use Drupal\Core\Url;
+ 
+ /**
+  * Tests the Comment Translation UI.
+@@ -238,4 +239,44 @@ protected function doTestTranslationEdit() {
+     }
+   }
+ 
++  /**
++   * Tests that translations are rendered properly.
++   */
++  public function testTranslationRendering() {
++    $default_langcode = $this->langcodes[0];
++    $values[$default_langcode] = $this->getNewEntityValues($default_langcode);
++    $this->entityId = $this->createEntity($values[$default_langcode], $default_langcode);
++    $comment = \Drupal::entityTypeManager()->getStorage($this->entityTypeId)->load($this->entityId);
++
++    // Create translations.
++    foreach (array_diff($this->langcodes, [$default_langcode]) as $langcode) {
++      $values[$langcode] = $this->getNewEntityValues($langcode);
++    }
++    $comment->save();
++
++    // Check that each of the local tasks links to correct translation.
++    $comment_id = $comment->id();
++    $node_id = $comment->getCommentedEntityId();
++    foreach ($this->langcodes as $langcode) {
++      $links = [];
++      $options = ['language' => \Drupal::languageManager()->getLanguage($langcode)];
++      $this->drupalGet("comment/$comment_id", $options);
++      $links = [
++        'Edit' => $comment->toUrl('edit-form', $options)->toString(),
++        'Delete' => $comment->toUrl('delete-form', $options)->toString(),
++        'Translate' => $comment->toUrl('drupal:content-translation-overview', $options)->toString(),
++        'Reply' => Url::fromRoute('comment.reply', ['entity_type' => 'node', 'entity' => $node_id, 'field_name' => 'comment_article', 'pid' => $comment_id], $options)->toString(),
++        'Approve' => Url::fromRoute('comment.approve' , ['comment' => $comment_id], $options)->toString(),
++      ];
++      // Strip the CSRF token.
++      $links['Approve'] = substr($links['Approve'], 0, strpos($links['Approve'], 'token='));
++      foreach ($links as $label => $expected_href) {
++        $links = $this->assertSession()->elementExists('xpath', "//article[@id='comment-$comment_id']")
++          ->findAll('xpath', "//a[text()='$label']");
++        $this->assertCount(1, $links);
++        $this->assertRegExp('|^' . $expected_href . '.*$|', $links[0]->getAttribute('href'));
++      }
++    }
++  }
++
+ }
